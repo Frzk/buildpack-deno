@@ -1,0 +1,173 @@
+#!/usr/bin/env bash
+# usage: bin/compile <build_dir> <cache_dir> <env_dir>
+
+set -o errexit
+set -o pipefail
+
+if [ -n "${BUILDPACK_DEBUG}" ]; then
+	set -o xtrace
+fi
+
+
+build_dir="${1:-}"
+cache_dir="${2:-}"
+# Unused: env_dir="${3:-}"
+base_dir="$( cd -P "$( dirname "${0}" )" && pwd )"
+buildpack_dir="$( readlink -f "${base_dir}/.." )"
+tmp_dir="$( mktemp --tmpdir="/tmp" --directory "deno-XXXX" )"
+
+readonly build_dir
+readonly cache_dir
+# Unused: readonly env_dir
+readonly base_dir
+readonly buildpack_dir
+readonly tmp_dir
+
+
+# shellcheck disable=SC1091
+source "${buildpack_dir}/cmnlib.sh"
+# shellcheck disable=SC1091
+source "${buildpack_dir}/VERSIONS"
+
+
+
+cmn::bp::start
+
+pushd "${build_dir}" >/dev/null 2>&1
+
+cmn::step::start "Installing Deno"
+
+version="${DENO_VERSION:-"${DENO_DEFAULT_VERSION}"}"
+readonly version
+
+if [[ -z "${version}" ]]; then
+	cmn::output::err "Unable to retrieve Deno version, aborting."
+	cmn::output::info <<- EOM
+		Please use the DENO_VERSION environment variable to specify the version to use.
+	EOM
+	exit
+fi
+
+cmn::output::info "Using Deno v${version}."
+
+
+dist="deno-x86_64-unknown-linux-gnu.zip"
+cache_file="${cache_dir}/deno-${version}.zip"
+package_url="https://dl.deno.land/release/v${version}/${dist}"
+
+readonly dist
+readonly cache_file
+readonly package_url
+
+mkdir --parents "${tmp_dir}"
+
+
+if [ -f "${cache_file}" ]; then
+	cmn::output::info "Found file in cache."
+else
+	cmn::task::start "Downloading archive"
+
+	if ! cmn::file::download "${package_url}" "${cache_file}"; then
+		cmn::task::fail "An error occured while downloading. Aborting."
+		exit
+	fi
+
+	cmn::task::finish
+fi
+
+
+cmn::task::start "Extracting"
+
+if ! unzip \
+	-o \
+	-qq \
+	"${cache_file}" \
+	-d "${tmp_dir}" \
+	2>/dev/null
+then
+	# Silently remove the file, don't fail:
+	rm --force "${cache_file}" >/dev/null 2>&1
+	cmn::task::fail "An error occured while extracting the archive. Aborting."
+	exit
+fi
+
+cmn::task::finish
+
+
+cmn::task::start "Installing"
+
+deno_dir="${build_dir}/.scalingo/deno"
+deno_bin_dir="${deno_dir}/bin"
+readonly deno_dir
+readonly deno_bin_dir
+
+mkdir --parents "${deno_bin_dir}"
+
+if ! mv "${tmp_dir}/deno" --target-directory="${deno_bin_dir}" 2>/dev/null; then
+	cmn::task::fail "An error occured while installing the files. Aborting."
+	exit
+fi
+
+# Silently remove $tmp_dir, do not fail.
+rm --recursive --force "${tmp_dir}" >/dev/null 2>&1
+
+# Make sure deno is executable:
+chmod ugo+x "${deno_bin_dir}/deno"
+
+cmn::task::finish
+
+
+cmn::step::finish
+
+
+
+cmn::step::start "Building Environment"
+
+export PATH="${deno_bin_dir}:${PATH}"
+export DENO_INSTALL_ROOT="${deno_dir}"
+export DENO_DIR="${cache_dir}"
+
+mkdir --parents "${build_dir}/.profile.d"
+
+cat <<- EOF > "${build_dir}/.profile.d/050-deno.sh"
+	export PATH="\${PATH}:\${HOME}/.scalingo/deno/bin"
+	export DENO_INSTALL_ROOT="\${HOME}/.scalingo/deno"
+	export DENO_DIR="\${cache_dir}"
+EOF
+
+cmn::step::finish
+
+
+
+cmn::step::start "Installing Dependencies"
+
+cmn::task::start "Caching modules"
+
+case "${version}" in
+	1.*)
+		if ! err="$( deno cache --quiet \
+					"${DENO_MAIN:-"api/main.ts"}" )"
+		then
+			cmn::task::fail "${err}"
+			cmn::step::fail
+			exit
+		fi
+		;;
+	*)
+		if ! err="$( deno install --quiet \
+					--allow-read="${build_dir}" --allow-write="${build_dir}" \
+					--allow-net \
+					--entrypoint "${DENO_MAIN:-"api/main.ts"}" 2>&1)"
+		then
+			cmn::task::fail "${err}"
+			cmn::step::fail
+			exit
+		fi
+		;;
+esac
+
+cmn::task::finish
+
+cmn::step::finish
+
+cmn::bp::finish
