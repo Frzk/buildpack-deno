@@ -3,5 +3,5 @@
 cat << EOF
 ---
 default_process_types:
-  web: deno run --allow-net=:${PORT} --allow-read=/app --allow-write=/app --allow-env "${DENO_MAIN:-"main.ts"}" --port=${PORT}
+  web: deno run --allow-net=:\${PORT} --allow-read=/app --allow-write=/app --allow-env "\${DENO_MAIN:-"main.ts"}" --port=\${PORT}
 EOF
