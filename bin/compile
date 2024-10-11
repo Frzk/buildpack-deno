@@ -146,7 +146,7 @@ cmn::task::start "Caching modules"
 case "${version}" in
 	1.*)
 		if ! err="$( deno cache --quiet \
-					"${DENO_MAIN:-"api/main.ts"}" )"
+					"${DENO_MAIN:-"main.ts"}" )"
 		then
 			cmn::task::fail "${err}"
 			cmn::step::fail
@@ -157,7 +157,7 @@ case "${version}" in
 		if ! err="$( deno install --quiet \
 					--allow-read="${build_dir}" --allow-write="${build_dir}" \
 					--allow-net \
-					--entrypoint "${DENO_MAIN:-"api/main.ts"}" 2>&1)"
+					--entrypoint "${DENO_MAIN:-"main.ts"}" 2>&1)"
 		then
 			cmn::task::fail "${err}"
 			cmn::step::fail
